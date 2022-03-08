@@ -39,7 +39,7 @@ def generateEllipse(a,b,centerX,centerY, grid, opacity):
     
     return grid
 
-def transitSim(a,b,r, speed, times, tref, opacity):
+def transitSim(a,b,r, speed, times, tref, opacity, impact):
     '''
     Creates a light curve of a transiting ellipse from the paramters
     Used by logLikelihood and to plot the light curves
@@ -51,6 +51,7 @@ def transitSim(a,b,r, speed, times, tref, opacity):
     times: A list of time points to generate a value for
     tref: The location of the center of the transit in the time array by value
     opacity: The opacity of the ellipse, although there is no technical limit for this value, the physical limit is [0,1] 
+    impact: Impact parameter of the occulter
     '''
     ##Calculate the dimension ratios incase the ellipse has to be resized
     ab = a/b
@@ -79,18 +80,18 @@ def transitSim(a,b,r, speed, times, tref, opacity):
     anew = int(ab*bnew)
     newIntDiffs = [res*i for i in intDiffs]
     
-    starGrid = np.zeros([2*rnew, 4*bnew+2*rnew+4])
-    ellipseGrid = np.zeros([2*rnew, 4*bnew+2*rnew+4])
+    starGrid = np.zeros([2*rnew+impact, 4*bnew+2*rnew+4])
+    ellipseGrid = np.zeros([2*rnew+impact, 4*bnew+2*rnew+4])
     starGrid = generateEllipse(rnew,rnew,rnew, 2*bnew+rnew, starGrid,1)##Generate the star
-    ellipseGrid = generateEllipse(anew,bnew,rnew,3*bnew+2*rnew + 2,ellipseGrid,opacity)##Genrate the occulter
-    planetGrid = np.ones([2*rnew,4*bnew+2*rnew+ 4]) - ellipseGrid
+    ellipseGrid = generateEllipse(anew,bnew,rnew+impact,3*bnew+2*rnew + 2,ellipseGrid,opacity)##Genrate the occulter
+    planetGrid = np.ones([2*rnew+impact,4*bnew+2*rnew+ 4]) - ellipseGrid
     fluxGrid = np.multiply(starGrid,planetGrid)##Calculate the flux by item by item multiplying each pixel in the star and planet grid and summing
     initialFlux = np.sum(fluxGrid)
     
     for i in newIntDiffs:
         for j in range(i):
             planetGrid = np.delete(planetGrid,0,1)
-            planetGrid = np.append(planetGrid,np.ones([2*rnew,1]),1)##Move the first column to the end to "move" the planet across the star
+            planetGrid = np.append(planetGrid,np.ones([2*rnew+impact,1]),1)##Move the first column to the end to "move" the planet across the star
             
         
         fluxGrid = np.multiply(starGrid,planetGrid)
@@ -117,13 +118,13 @@ def logLikelihood(theta, times,tRef, flux, fluxErr):
     Returns:
         lnl (float) - log likelihood for the given theta values
     """
-    xdim, ydim, velocity, opacity = theta
-    fluxPredicted = transitSim(ydim, xdim,50,velocity,times, tRef,opacity)
+    xdim, ydim, velocity, opacity, impact = theta
+    fluxPredicted = transitSim(ydim, xdim,50,velocity,times, tRef,opacity,int(impact))
     error = [((flux[i] - fluxPredicted[i])**2) /(2*fluxErr[i]**2) for i in range(len(flux))]
     lnl = -np.sum(error)
     return lnl
 
-def logPrior(theta, times):
+def logPrior(theta, times, minFlux):
     """
     Returns flat priors, checking that the given theta values are physically possible
     Used by logProbability
@@ -134,16 +135,20 @@ def logPrior(theta, times):
     Returns: 
         lnPrior (float) - fixed log prior value if theta values are allowed, -inf if theta values aren't
     """
-    xdim, ydim, velocity, opacity = theta
+    xdim, ydim, velocity, opacity,impact = theta
     lnPrior = 0
-    if 0 < xdim < 50 and 0 < ydim < 50 and 0 < velocity < 50 and 0 < opacity < 1.1: ##Check to see if the shape exists but is not larger than the star
+    if 0 < xdim < 50 and 0 < ydim < 50 and 0 < velocity < 50 and 0 < opacity < 1.01 and 0 < impact < 100: ##Check to see if the shape exists but is not larger than the star
         ##Also check to see that it transits in a consistent direction and not extremely fast and that it is not super dark
-        lnPrior +=  2*np.log(1/100) + np.log(1/50) + np.log(1)
+        lnPrior +=  + np.log(1/50) + np.log(1)
     else:
         return -np.inf
+
+    predictedRadius = 50*np.sqrt(1-minFlux)
+    lnPrior += (5000/(np.sqrt(2*3.1415926535)*5))*np.exp(-0.5*((xdim-predictedRadius)/5)**2)
+    lnPrior += (5000/(np.sqrt(2*3.1415926535)*5))*np.exp(-0.5*((ydim-predictedRadius)/5)**2)
     return lnPrior
 
-def logProbability(theta, times, tRef, flux, fluxErr):
+def logProbability(theta, times, tRef, flux, fluxErr,minFlux):
     """
     Combines the log likelihood and log prior to get log probability
     Used by emcee.sample()
@@ -152,7 +157,7 @@ def logProbability(theta, times, tRef, flux, fluxErr):
         times (list)
     """
     startTime = time.time()
-    lp = logPrior(theta, times)
+    lp = logPrior(theta, times,minFlux)
     if not np.isfinite(lp):
         return -np.inf
     ll = logLikelihood(theta, times,tRef, flux, fluxErr)
@@ -165,7 +170,7 @@ def logProbability(theta, times, tRef, flux, fluxErr):
 
 
 
-
+'''
 def load_lc(fp, fluxtype="PDC", mask=False):
     """Load light curve data from pickle file into a lightkurve object
     Args:
@@ -214,7 +219,7 @@ def load_lc(fp, fluxtype="PDC", mask=False):
         )
 
     return lc
-
+'''
 
 '''
 ##Code for pulling a light curve from lightkurve
@@ -222,13 +227,13 @@ searchResult = lk.search_lightcurve("KIC 8462852", quarter = 8)
 lc = searchResult.download()
 '''
 ##lc = load_lc("./lcs/tesslc_67646988.pkl")
-searchResult = lk.search_lightcurve("TIC 67646988")
+searchResult = lk.search_lightcurve("TIC 200297691")
 lc = searchResult.download()
 lc = lc.flatten()
 lc = lc.normalize()
 lc = lc.remove_nans()
 lc = lc.remove_nans('flux_err')
-lc = lc.truncate(1880,1881)
+#lc = lc.truncate(57170,57175)
 times = lc.time.mjd
 flux = lc.flux.value
 fluxErr = lc.flux_err.value
@@ -238,6 +243,7 @@ minFlux = np.min(flux)
 index = np.where(flux == minFlux)
 tRef = times[index[0]]
 print(tRef)
+lc = lc.truncate(tRef-3,tRef+3)
 
 
 
@@ -249,33 +255,33 @@ print("{0} CPUs".format(ncpu))
 
 
 #Make a guess at the light curve
-pos = [15,15,6,1] * np.ones([20,4]) + [15,15,6,1]*((np.random.random([20,4])-0.5)/5)
+pos = [15,15,6,1,50] * np.ones([20,5]) + [15,15,6,1,50]*((np.random.random([20,5])-0.5)/5)
 nwalkers, ndim = pos.shape
 
 ##Sample!!!!
 print("Beginning Sampling")
 with Pool() as pool:
-    sampler = emcee.EnsembleSampler(nwalkers, ndim, logProbability, args = (times, tRef, flux, fluxErr), pool = pool)
+    sampler = emcee.EnsembleSampler(nwalkers, ndim, logProbability, args = (times, tRef, flux, fluxErr,minFlux), pool = pool)
     sampler.run_mcmc(pos,8000)
 
 
 
 
 ##This block plots the traces of the 5parameters
-fig, axes = plt.subplots(5,figsize = (10,10), sharex = True)
+fig, axes = plt.subplots(6,figsize = (10,10), sharex = True)
 samples = sampler.get_chain()
 logProb = sampler.get_log_prob()
-labels = ["X dim", "Y dim", "Pixel Speed", "Opacity"]
+labels = ["X dim", "Y dim", "Pixel Speed", "Opacity", "Impact Parameter"]
 for i in range(ndim):
     axes[i].plot(samples[:,:,i],'k',alpha = 0.3)
     axes[i].set_xlim(0,len(samples))
     axes[i].set_ylabel(labels[i])
     
-axes[4].plot(logProb[:,:],'k',alpha = 0.3)
-axes[4].set_xlim(0,len(samples))
-axes[4].set_ylabel("Log Probability")
+axes[-1].plot(logProb[:,:],'k',alpha = 0.3)
+axes[-1].set_xlim(0,len(samples))
+axes[-1].set_ylabel("Log Probability")
 axes[-1].set_xlabel("Step Number")
-plt.savefig("tracesTIC67646988.png")
+plt.savefig("tracesTIC200297691.png")
 
 fig = plt.subplot()
 
@@ -288,14 +294,14 @@ inds = np.random.randint(len(flat_samples), size=100)
 for ind in inds:
     try:
         sample = flat_samples[ind]
-        sampleFlux = transitSim(sample[0],sample[1],50,sample[2],times,tRef,sample[3])
+        sampleFlux = transitSim(sample[0],sample[1],50,sample[2],times,tRef,sample[3],int(sample[4]))
         fig.plot(times,sampleFlux,alpha = 0.1, color = 'orange')
     except:
         print("Invalid parameters", sample)
     
 
 fig.plot(times,flux, alpha = 0.5, color = 'blue',ls = '-', marker = 'o')
-plt.savefig("transitsTIC67646988.png")
+plt.savefig("transitsTIC200297691.png")
 
 
 
@@ -303,4 +309,7 @@ plt.savefig("transitsTIC67646988.png")
 ##Make a corner plot
 flatSamples = sampler.get_chain(discard = 500, flat = True)
 fig = corner.corner(flatSamples, bins = 40, labels = labels)
-plt.savefig("cornerTIC67646988.png")
+plt.savefig("cornerTIC200297691.png")
+
+for i in range(ndim):
+    print(np.mean(samples[:,:,i]),np.std(samples[:,:,i]))
